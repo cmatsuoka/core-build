@@ -18,37 +18,39 @@ esac
 
 
 # shellcheck disable=SC2013
-for x in $(cat /proc/cmdline); do
-    case $x in
-        snap_recovery_mode=*)
-            snap_recovery_mode=${x#*=}
-            ;;
-    esac
-done
-
+#for x in $(cat /proc/cmdline); do
+#    case $x in
+#        snap_recovery_mode=*)
+#            snap_recovery_mode=${x#*=}
+#            ;;
+#    esac
+#done
 
 seed_grubenv_get() {
-    grub-editenv /ubuntu-seed/EFI/ubuntu/grubenv list|grep -w "$1"|cut -d= -f2
+    grub-editenv /ubuntu-seed/boot/grub/grubenv list|grep -w "$1"|cut -d= -f2
 }
 
 seed_grubenv_set() {
-    grub-editenv /ubuntu-seed/EFI/ubuntu/grubenv set "$1"
+    grub-editenv /ubuntu-seed/boot/grub/grubenv set "$1"
 }
 
-ubuntu_seed_part="$(findfs LABEL=ubuntu-seed || true)"
+# XXX: fix labels
+ubuntu_seed_part="$(findfs LABEL=UbuntuSeed || true)"
 ubuntu_boot_part="$(findfs LABEL=ubuntu-boot || true)"
 
 mkdir /ubuntu-seed /ubuntu-boot
 mount -t vfat "$ubuntu_seed_part" /ubuntu-seed
-mount -t vfat "$ubuntu_boot_part" /ubuntu-boot
+#mount -t vfat "$ubuntu_boot_part" /ubuntu-boot
 recovery=$(seed_grubenv_get "snap_recovery_system")
+snap_recovery_mode=$(seed_grubenv_get "snap_recovery_mode")
+
 echo "System recovery set to $recovery"
 
-recovery_root="/ubuntu-seed/"
-recovery_path="$recovery_root/systems/$recovery"
-system_path="/system-data"
-seed_path="$system_path/var/lib/snapd/seed"
-snaps_path="$system_path/var/lib/snapd/snaps"
+seed_root="/ubuntu-seed/"
+recovery_path="$seed_root/systems/$recovery"
+data_root="/system-data"
+seed_path="$data_root/var/lib/snapd/seed"
+#snaps_path="$data_root/var/lib/snapd/snaps"
 chooser_output_file="/chooser.out"
 
 
@@ -107,21 +109,23 @@ run_chooser() {
 
 populate_writable_partition() {
     mkdir -p /writable/"$seed_path"
-    mkdir -p /writable/"$snaps_path"
+    #mkdir -p /writable/"$snaps_path"
     mkdir -p /writable/system-data/boot
     echo "bind mount recovery"
-    mount -o bind "$recovery_path" /writable/"$seed_path"
+    # was recovery_path
+    mount -o bind "$seed_root" /writable/"$seed_path"
     echo "bind mount snap directory"
     mkdir -p /writable/"$seed_path"/snaps
-    mount -o bind "$recovery_root"/snaps /writable/"$seed_path"/snaps
-    
+    mount -o bind "$recovery_path"/snaps /writable/"$seed_path"/snaps
+
     echo "create symlinks"
-    snap_core=$(basename "$(echo "$recovery_root"/snaps/core20_*.snap|tail -1)")
+    snap_core=$(basename "$(echo "$seed_root"/snaps/core20_*.snap|tail -1)")
+
     # fugly - hardcoded kernel name :( we need this so that the grub-bootenv
     # kernel name matches the kernel that is later seeded
-    snap_kernel=$(basename "$(echo "$recovery_root"/snaps/pc-kernel_*.snap|tail -1)")
-    ln -s ../seed/snaps/"$snap_core" /writable/"$snaps_path"
-    ln -s ../seed/snaps/"$snap_kernel" /writable/"$snaps_path"
+    #snap_kernel=$(basename "$(echo "$seed_root"/snaps/pc-kernel_*.snap|tail -1)")
+    #ln -s ../seed/snaps/"$snap_core" /writable/"$snaps_path"
+    #ln -s ../seed/snaps/"$snap_kernel" /writable/"$snaps_path"
     echo "done"
 }
 
@@ -137,7 +141,9 @@ update_grub() {
     grub-editenv "$system_boot_grubenv" set snap_kernel="pc-kernel_x1.snap"
 }
 
-check_recover_trigger
+#check_recover_trigger
+
+echo "RECOVERY MODE: $snap_recovery_mode"
 
 # Only prepare writable on tmpfs in these modes
 if [ "$snap_recovery_mode" != "install" ] && [ "$snap_recovery_mode" != "recover" ]; then
@@ -145,9 +151,11 @@ if [ "$snap_recovery_mode" != "install" ] && [ "$snap_recovery_mode" != "recover
 fi
 
 create_writable_partition_on_tmpfs
-run_chooser
+#run_chooser
 populate_writable_partition
-update_grub
+#update_grub
+
+echo END OF INSTALL SCRIPT
 
 sync
 

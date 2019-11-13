@@ -7,9 +7,10 @@
 
 . /scripts/ubuntu-core-functions
 
+set -x
 
 seed_grubenv_get() {
-    grub-editenv /ubuntu-seed/EFI/ubuntu/grubenv list|grep -w "$1"|cut -d= -f2
+    grub-editenv /ubuntu-seed/boot/grub/grubenv list|grep -w "$1"|cut -d= -f2
 }
 
 sync_dirs()
@@ -174,12 +175,12 @@ fsck_writable()
 mount_snaps()
 {
         # mount OS snap
-        mount -o ro "${writable_mnt}/system-data/var/lib/snapd/snaps/${snap_core}" "$rootmnt"
+        mount -o ro "${writable_mnt}/system-data/var/lib/snapd/seed/snaps/${snap_core}" "$rootmnt"
 
         # now add a kernel bind mounts to it
         local kernel_mnt="/tmpmnt_kernel"
         mkdir -p "$kernel_mnt"
-        mount -o ro "${writable_mnt}/system-data/var/lib/snapd/snaps/${snap_kernel}" "$kernel_mnt"
+        mount -o ro "${writable_mnt}/system-data/var/lib/snapd/seed/snaps/${snap_kernel}" "$kernel_mnt"
         for d in modules firmware; do
             if [ -d "${kernel_mnt}/$d" ]; then
                 mount -o bind "${kernel_mnt}/$d" "$rootmnt/lib/$d"
@@ -208,39 +209,28 @@ mountroot()
 {
         pre_mountroot
 
+        encrypted_data=false
+
 	[ "$quiet" != "y" ] && log_begin_msg "Running /scripts/local-premount"
 	run_scripts /scripts/local-premount
 	[ "$quiet" != "y" ] && log_end_msg
         
-        # find what snappy-os version to use
-        for x in $(cat /proc/cmdline); do
-	    case "${x}" in
-                snap_recovery_mode=*)
-			snap_recovery_mode="${x#*=}"
-			;;
-		esac
-	done
+        snap_recovery_mode=$(seed_grubenv_get "snap_recovery_mode")
 
-        if [ -f /.recover ]; then
-            snap_recovery_mode=recover
-        fi
+        #if [ -f /.recover ]; then
+        #    snap_recovery_mode=recover
+        #fi
 
         snap_core=$(seed_grubenv_get "snap_core")
         snap_kernel=$(seed_grubenv_get "snap_kernel")
 
         echo =============================
         echo cmdline: $(cat /proc/cmdline)
-        grub-editenv /ubuntu-seed/EFI/ubuntu/grubenv list
+        grub-editenv /ubuntu-seed/boot/grub/grubenv list
         echo =============================
 
         umount /ubuntu-seed
-        umount /ubuntu-boot
-
-        if [ "$snap_recovery_mode" = "install" ] || [ "$snap_recovery_mode" = "recover" ]; then
-            # FIXME: these should come from grubenv or inferred from snap_recovery_system
-            snap_core="core20_x1.snap"
-            snap_kernel="pc-kernel_x1.snap"
-        fi
+        #umount /ubuntu-boot
 
         # basic validation
         if [ -z "$snap_core" ]; then
@@ -252,9 +242,13 @@ mountroot()
 
 	# Request bootloader partition be mounted
 	boot_partition=$(findfs LABEL="ubuntu-boot" 2>/dev/null || :)
+        # XXX: fix partition name
+	seed_partition=$(findfs LABEL="UbuntuSeed" 2>/dev/null || :)
 
-        if [ "$snap_recovery_mode" != "install" ]; then
-            open_data_partition
+        if $encrypted_data; then
+            if [ "$snap_recovery_mode" != "install" ]; then
+                open_data_partition
+            fi
         fi
 
         # always ensure writable is in a good state
@@ -264,8 +258,10 @@ mountroot()
             writable_mnt="/writable"
         else
             # FIXME: we need this to create /dev/disk/by-label/ubuntu-data used by wait-for-root
-            udevadm control --property DM_UDEV_PRIMARY_SOURCE_FLAG=1
-            udevadm trigger /dev/dm-0
+            if $encrypted_data; then
+                udevadm control --property DM_UDEV_PRIMARY_SOURCE_FLAG=1
+                udevadm trigger /dev/dm-0
+            fi
 
             writable_mnt="/tmpmnt_${writable_label}"
 	    mkdir -p "$writable_mnt"
@@ -312,6 +308,15 @@ mountroot()
 
         # IMPORTANT: ensure we synced everything back to disk
         sync
+
+	# if in install mode, mount the recover bootloader in /boot
+	if [ "$snap_recovery_mode" = "install" ]; then
+                tmpseed_mnt="/tmpmnt_ubuntu-seed"
+		mkdir -p "$tmpseed_mnt"
+		mount "$seed_partition" "$tmpseed_mnt"
+                mount -o bind "${tmpseed_mnt}/boot/grub" "${rootmnt}/boot/grub"
+                umount "$tmpseed_mnt"
+	fi
 
 	if [ -n "$boot_partition" ]; then
 	        # determine bootloader type, we need to inspect the boot
@@ -382,8 +387,10 @@ mountroot()
 	done
 
         # Propagate the recover marker
-        [ -f /.recover ] && mv /.recover "${rootmnt}/writable/system-data/"
-        [ -f /chooser.out ] && mv /chooser.out "${rootmnt}/writable/system-data/"
+        #[ -f /.recover ] && mv /.recover "${rootmnt}/writable/system-data/"
+        #[ -f /chooser.out ] && mv /chooser.out "${rootmnt}/writable/system-data/"
+
+        echo END OF INITRAMFS SCRIPT
 
 	[ "$quiet" != "y" ] && log_begin_msg "Running /scripts/local-bottom"
 	run_scripts /scripts/local-bottom
